@@ -9,8 +9,7 @@ class HealthCheckServerTest extends FlatSpec with Matchers {
   "HealthCheckServer" should "work" ignore {
     val server = new HealthCheckServer(
       livenessChecks = Map("foo" -> { _ => Future.successful(CheckResult("foo", success = true, JObject())) }),
-      readinessChecks = Map("bar" -> { _ => Future.successful(CheckResult("bar", success = false, JObject())) }),
-      "http://localhost:8888/health"
+      readinessChecks = Map("bar" -> { _ => Future.successful(CheckResult("bar", success = false, JObject())) })
     )
     server.run(8888)
     server.join()

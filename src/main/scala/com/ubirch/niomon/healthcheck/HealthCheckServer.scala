@@ -28,15 +28,14 @@ case class CheckResult(checkName: String, success: Boolean, payload: JValue)
 
 class HealthCheckServer(
   var livenessChecks: Map[String, CheckerFn],
-  var readinessChecks: Map[String, CheckerFn],
-  swaggerBaseUrl: String
+  var readinessChecks: Map[String, CheckerFn]
 ) extends HealthCheckApi {
   implicit val ec: ExecutionContext = ExecutionContext.global
 
   private def doCheck(checks: Map[String, CheckerFn]): Future[(Boolean, JValue)] = {
     Future.sequence(checks.map { case (checkName, checkerFn) =>
       checkerFn(ec).transform {
-        case s@Success(value) => s
+        case s@Success(_) => s
         case Failure(exception) => Success(CheckResult(
           checkName = checkName,
           success = false,
@@ -89,7 +88,7 @@ class HealthCheckServer(
 
     server = new JettyServer(this, HealthCheckApi.openapiMetadata.openapi(
       Info("Health Check API", "1.0.0"),
-      servers = List(Server(swaggerBaseUrl))
+      servers = List(Server(s"http://localhost:$port/health"))
     ), port)
 
     server.start()
