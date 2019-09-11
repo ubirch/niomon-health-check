@@ -22,6 +22,7 @@ import org.json4s.jackson.JsonMethods
 import scala.concurrent.{ExecutionContext, Future}
 import scala.collection.JavaConverters._
 import scala.language.implicitConversions
+import scala.util.{Failure, Success}
 
 case class CheckResult(checkName: String, success: Boolean, payload: JValue)
 
@@ -33,7 +34,16 @@ class HealthCheckServer(
   implicit val ec: ExecutionContext = ExecutionContext.global
 
   private def doCheck(checks: Map[String, CheckerFn]): Future[(Boolean, JValue)] = {
-    Future.sequence(checks.values.map(_ (ec)))
+    Future.sequence(checks.map { case (checkName, checkerFn) =>
+      checkerFn(ec).transform {
+        case s@Success(value) => s
+        case Failure(exception) => Success(CheckResult(
+          checkName = checkName,
+          success = false,
+          payload = JObject(("status", JString(s"exception: ${exception.getMessage}")))
+        ))
+      }
+    })
       .map { checks =>
         checks.foldLeft((true, JObject())) { case ((success, o), check) =>
           (success && check.success, o.merge(JsonDSL.pair2jvalue((check.checkName, check.payload))))
@@ -121,7 +131,7 @@ object Checks {
     })
   }
 
-  private def processKafkaMetrics(metrics: collection.Map[MetricName, Metric], connectionCountMustBeNonZero: Boolean) = {
+  private def processKafkaMetrics(name: String, metrics: collection.Map[MetricName, Metric], connectionCountMustBeNonZero: Boolean) = {
     implicit class RichMetric(m: Metric) {
       // we're never interested in consumer node metrics, so let's get rid of them here
       @inline def is(name: String): Boolean = m.metricName().group() != "consumer-node-metrics" && m.metricName().name() == name
@@ -158,25 +168,25 @@ object Checks {
 
     val payload = json(processedMetrics).merge(JObject("status" -> JString(if (success) "ok" else "nok")))
 
-    CheckResult("kafka", success, payload)
+    CheckResult(name, success, payload)
   }
 
-  def kafka(kafkaControl: Option[Control], connectionCountMustBeNonZero: Boolean): CheckerFn = { implicit ec =>
+  def kafka(name: String, kafkaControl: Option[Control], connectionCountMustBeNonZero: Boolean): (String, CheckerFn) = (name, { implicit ec =>
     kafkaControl
       .map(_.metrics)
       .getOrElse(Future.successful(Map[MetricName, Metric]()))
-      .map(processKafkaMetrics(_, connectionCountMustBeNonZero))
-  }
+      .map(processKafkaMetrics(name, _, connectionCountMustBeNonZero))
+  })
 
-  def kafka(producer: Producer[_, _], connectionCountMustBeNonZero: Boolean): CheckerFn = { () =>
+  def kafka(name: String, producer: Producer[_, _], connectionCountMustBeNonZero: Boolean): (String, CheckerFn) = (name, { () =>
     val metrics = producer.metrics().asScala
-    Future.successful(processKafkaMetrics(metrics, connectionCountMustBeNonZero))
-  }
+    Future.successful(processKafkaMetrics(name, metrics, connectionCountMustBeNonZero))
+  })
 
-  def kafka(consumer: Consumer[_, _], connectionCountMustBeNonZero: Boolean): CheckerFn = { () =>
+  def kafka(name: String, consumer: Consumer[_, _], connectionCountMustBeNonZero: Boolean): (String, CheckerFn) = (name, { () =>
     val metrics = consumer.metrics().asScala
-    Future.successful(processKafkaMetrics(metrics, connectionCountMustBeNonZero))
-  }
+    Future.successful(processKafkaMetrics(name, metrics, connectionCountMustBeNonZero))
+  })
 }
 
 @adjustSchema(HealthCheckResponse.flatten)
