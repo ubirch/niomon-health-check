@@ -124,7 +124,7 @@ object Checks {
 
       val json = dataPoints.foldRight(JObject())((samples, jo) => jo.merge(
         JObject(samples.name.replaceAll("_", "-") -> JDouble(samples.samples.asScala.last.value))
-      ))
+      )).merge(JObject(("status", JString("ok"))))
 
       Future.successful(CheckResult("process", success = true, json))
     })
