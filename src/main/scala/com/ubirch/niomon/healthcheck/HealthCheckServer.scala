@@ -22,18 +22,27 @@ import org.json4s.jackson.JsonMethods
 import scala.concurrent.{ExecutionContext, Future}
 import scala.collection.JavaConverters._
 import scala.language.implicitConversions
+import scala.util.{Failure, Success}
 
 case class CheckResult(checkName: String, success: Boolean, payload: JValue)
 
 class HealthCheckServer(
   var livenessChecks: Map[String, CheckerFn],
-  var readinessChecks: Map[String, CheckerFn],
-  swaggerBaseUrl: String
+  var readinessChecks: Map[String, CheckerFn]
 ) extends HealthCheckApi {
   implicit val ec: ExecutionContext = ExecutionContext.global
 
   private def doCheck(checks: Map[String, CheckerFn]): Future[(Boolean, JValue)] = {
-    Future.sequence(checks.values.map(_ (ec)))
+    Future.sequence(checks.map { case (checkName, checkerFn) =>
+      checkerFn(ec).transform {
+        case s@Success(_) => s
+        case Failure(exception) => Success(CheckResult(
+          checkName = checkName,
+          success = false,
+          payload = JObject(("status", JString(s"exception: ${exception.getMessage}")))
+        ))
+      }
+    })
       .map { checks =>
         checks.foldLeft((true, JObject())) { case ((success, o), check) =>
           (success && check.success, o.merge(JsonDSL.pair2jvalue((check.checkName, check.payload))))
@@ -79,7 +88,7 @@ class HealthCheckServer(
 
     server = new JettyServer(this, HealthCheckApi.openapiMetadata.openapi(
       Info("Health Check API", "1.0.0"),
-      servers = List(Server(swaggerBaseUrl))
+      servers = List(Server(s"http://localhost:$port/health"))
     ), port)
 
     server.start()
@@ -115,13 +124,13 @@ object Checks {
 
       val json = dataPoints.foldRight(JObject())((samples, jo) => jo.merge(
         JObject(samples.name.replaceAll("_", "-") -> JDouble(samples.samples.asScala.last.value))
-      ))
+      )).merge(JObject(("status", JString("ok"))))
 
       Future.successful(CheckResult("process", success = true, json))
     })
   }
 
-  private def processKafkaMetrics(metrics: collection.Map[MetricName, Metric], connectionCountMustBeNonZero: Boolean) = {
+  private def processKafkaMetrics(name: String, metrics: collection.Map[MetricName, Metric], connectionCountMustBeNonZero: Boolean) = {
     implicit class RichMetric(m: Metric) {
       // we're never interested in consumer node metrics, so let's get rid of them here
       @inline def is(name: String): Boolean = m.metricName().group() != "consumer-node-metrics" && m.metricName().name() == name
@@ -158,25 +167,25 @@ object Checks {
 
     val payload = json(processedMetrics).merge(JObject("status" -> JString(if (success) "ok" else "nok")))
 
-    CheckResult("kafka", success, payload)
+    CheckResult(name, success, payload)
   }
 
-  def kafka(kafkaControl: Option[Control], connectionCountMustBeNonZero: Boolean): CheckerFn = { implicit ec =>
+  def kafka(name: String, kafkaControl: Option[Control], connectionCountMustBeNonZero: Boolean): (String, CheckerFn) = (name, { implicit ec =>
     kafkaControl
       .map(_.metrics)
       .getOrElse(Future.successful(Map[MetricName, Metric]()))
-      .map(processKafkaMetrics(_, connectionCountMustBeNonZero))
-  }
+      .map(processKafkaMetrics(name, _, connectionCountMustBeNonZero))
+  })
 
-  def kafka(producer: Producer[_, _], connectionCountMustBeNonZero: Boolean): CheckerFn = { () =>
+  def kafka(name: String, producer: Producer[_, _], connectionCountMustBeNonZero: Boolean): (String, CheckerFn) = (name, { () =>
     val metrics = producer.metrics().asScala
-    Future.successful(processKafkaMetrics(metrics, connectionCountMustBeNonZero))
-  }
+    Future.successful(processKafkaMetrics(name, metrics, connectionCountMustBeNonZero))
+  })
 
-  def kafka(consumer: Consumer[_, _], connectionCountMustBeNonZero: Boolean): CheckerFn = { () =>
+  def kafka(name: String, consumer: Consumer[_, _], connectionCountMustBeNonZero: Boolean): (String, CheckerFn) = (name, { () =>
     val metrics = consumer.metrics().asScala
-    Future.successful(processKafkaMetrics(metrics, connectionCountMustBeNonZero))
-  }
+    Future.successful(processKafkaMetrics(name, metrics, connectionCountMustBeNonZero))
+  })
 }
 
 @adjustSchema(HealthCheckResponse.flatten)
