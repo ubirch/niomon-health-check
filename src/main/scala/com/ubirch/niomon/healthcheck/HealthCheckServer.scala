@@ -170,11 +170,8 @@ object Checks {
     CheckResult(name, success, payload)
   }
 
-  def kafka(name: String, kafkaControl: Option[Control], connectionCountMustBeNonZero: Boolean): (String, CheckerFn) = (name, { implicit ec =>
-    kafkaControl
-      .map(_.metrics)
-      .getOrElse(Future.successful(Map[MetricName, Metric]()))
-      .map(processKafkaMetrics(name, _, connectionCountMustBeNonZero))
+  def kafka(name: String, kafkaControl: Control, connectionCountMustBeNonZero: Boolean): (String, CheckerFn) = (name, { implicit ec =>
+    kafkaControl.metrics.map(processKafkaMetrics(name, _, connectionCountMustBeNonZero))
   })
 
   def kafka(name: String, producer: Producer[_, _], connectionCountMustBeNonZero: Boolean): (String, CheckerFn) = (name, { () =>
