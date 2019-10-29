@@ -1,5 +1,6 @@
 package com.ubirch.niomon.healthcheck
 
+import java.net.InetAddress
 import java.util.Collections
 
 import akka.kafka.scaladsl.Consumer.Control
@@ -12,10 +13,11 @@ import io.udash.rest.openapi.{DataType, Info, RefOr, RestSchema, Schema, Server}
 import io.udash.rest.raw.{HttpBody, RestResponse}
 import io.udash.rest.{DefaultRestApiCompanion, GET, RestDataCompanion, RestDataWrapperCompanion}
 import io.udash.rest.raw.JsonValue
+import org.apache.kafka.clients.Metadata
 import org.apache.kafka.clients.consumer.Consumer
-import org.apache.kafka.clients.producer.Producer
+import org.apache.kafka.clients.producer.{KafkaProducer, Producer}
 import org.apache.kafka.common.{Metric, MetricName}
-import org.json4s.JsonAST.{JDouble, JObject, JString, JValue}
+import org.json4s.JsonAST.{JBool, JDouble, JObject, JString, JValue}
 import org.json4s.JsonDSL
 import org.json4s.jackson.JsonMethods
 
@@ -159,8 +161,15 @@ object Checks {
 
     val processedMetrics = relevantMetrics(metrics)
     // TODO: ask for other failure conditions
-    val success = !connectionCountMustBeNonZero ||
-      processedMetrics.getOrElse("connection-count", 0.0).asInstanceOf[Double] != 0.0
+    val success = (!connectionCountMustBeNonZero ||
+      processedMetrics.getOrElse("connection-count", 0.0).asInstanceOf[Double] != 0.0) &&
+      {
+        val lastHeartbeat = processedMetrics.getOrElse("last-heartbeat-seconds-ago", 0.0).asInstanceOf[Double]
+
+        // the second part of that check is needed because kafka uses unreasonable defaults
+        // (the value is roughly seconds since 1970, as of 2019-10-28)
+        lastHeartbeat < 60.0 || lastHeartbeat > 49 * 365 * 24 * 60 * 60
+      }
 
     def json(metrics: Map[String, AnyRef]): JValue =
       JsonMethods.fromJsonNode(JsonMethods.mapper.valueToTree[JsonNode](metrics.asJava))
@@ -183,6 +192,23 @@ object Checks {
     val metrics = consumer.metrics().asScala
     Future.successful(processKafkaMetrics(name, metrics, connectionCountMustBeNonZero))
   })
+
+  def kafkaNodesReachable(producer: Producer[_, _]): (String, HealthCheckServer.CheckerFn) = {
+    val kafkaProducer = producer.asInstanceOf[KafkaProducer[_, _]]
+    val f = classOf[KafkaProducer[_, _]].getDeclaredField("metadata")
+    f.setAccessible(true)
+
+    "kafka-nodes-reachable" -> { implicit ec =>
+      val metadata = f.get(kafkaProducer).asInstanceOf[Metadata]
+
+      Future.sequence(metadata.fetch().nodes().asScala.map { node =>
+        Future(node.host() -> InetAddress.getByName(node.host).isReachable(200))
+      }).map { reachability =>
+        CheckResult("kafka-nodes-reachable", reachability.forall(_._2),
+          JObject(reachability.toList.map { case (host, reachable) => host -> JBool(reachable) }))
+      }
+    }
+  }
 }
 
 @adjustSchema(HealthCheckResponse.flatten)
