@@ -1,6 +1,6 @@
 package com.ubirch.niomon.healthcheck
 
-import java.net.InetAddress
+import java.net.{InetSocketAddress, Socket}
 import java.util.Collections
 
 import akka.kafka.scaladsl.Consumer.Control
@@ -9,20 +9,19 @@ import com.fasterxml.jackson.databind.JsonNode
 import com.ubirch.niomon.healthcheck.HealthCheckServer._
 import io.prometheus.client.CollectorRegistry
 import io.udash.rest.openapi.adjusters.adjustSchema
-import io.udash.rest.openapi.{DataType, Info, RefOr, RestSchema, Schema, Server}
-import io.udash.rest.raw.{HttpBody, RestResponse}
+import io.udash.rest.openapi._
+import io.udash.rest.raw.{HttpBody, JsonValue, RestResponse}
 import io.udash.rest.{DefaultRestApiCompanion, GET, RestDataCompanion, RestDataWrapperCompanion}
-import io.udash.rest.raw.JsonValue
 import org.apache.kafka.clients.Metadata
 import org.apache.kafka.clients.consumer.Consumer
 import org.apache.kafka.clients.producer.{KafkaProducer, Producer}
 import org.apache.kafka.common.{Metric, MetricName}
-import org.json4s.JsonAST.{JBool, JDouble, JObject, JString, JValue}
+import org.json4s.JsonAST._
 import org.json4s.JsonDSL
 import org.json4s.jackson.JsonMethods
 
-import scala.concurrent.{ExecutionContext, Future}
 import scala.collection.JavaConverters._
+import scala.concurrent.{ExecutionContext, Future}
 import scala.language.implicitConversions
 import scala.util.{Failure, Success}
 
@@ -202,9 +201,23 @@ object Checks {
       val metadata = f.get(kafkaProducer).asInstanceOf[Metadata]
 
       Future.sequence(metadata.fetch().nodes().asScala.map { node =>
-        Future(node.host() -> InetAddress.getByName(node.host).isReachable(200))
+        Future {
+          // Q: Why isn't this just using [java.net.InetAddress.isReachable(int)]?
+          // A: Because that uses ICMP and Kubernetes is sometimes weird about ICMP (so for example, ping doesn't work
+          //    sometimes)
+          val reachableViaKafkaTcpPort = try {
+            val socket = new Socket()
+            socket.connect(new InetSocketAddress(node.host(), node.port()), 100)
+            socket.close()
+            true
+          } catch {
+            case _: Throwable => false
+          }
+
+          node.host() -> reachableViaKafkaTcpPort
+        }
       }).map { reachability =>
-        CheckResult("kafka-nodes-reachable", reachability.forall(_._2),
+        CheckResult("kafka-nodes-reachable", reachability.exists(_._2),
           JObject(reachability.toList.map { case (host, reachable) => host -> JBool(reachable) }))
       }
     }
