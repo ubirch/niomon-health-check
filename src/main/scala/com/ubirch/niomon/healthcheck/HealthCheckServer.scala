@@ -6,6 +6,7 @@ import java.util.Collections
 import akka.kafka.scaladsl.Consumer.Control
 import com.avsystem.commons.rpc.AsRaw
 import com.fasterxml.jackson.databind.JsonNode
+import com.typesafe.scalalogging.StrictLogging
 import com.ubirch.niomon.healthcheck.HealthCheckServer._
 import io.prometheus.client.CollectorRegistry
 import io.udash.rest.openapi.adjusters.adjustSchema
@@ -19,6 +20,7 @@ import org.apache.kafka.common.{Metric, MetricName}
 import org.json4s.JsonAST._
 import org.json4s.JsonDSL
 import org.json4s.jackson.JsonMethods
+import net.logstash.logback.argument.StructuredArguments.v
 
 import scala.collection.JavaConverters._
 import scala.concurrent.{ExecutionContext, Future}
@@ -30,7 +32,7 @@ case class CheckResult(checkName: String, success: Boolean, payload: JValue)
 class HealthCheckServer(
   var livenessChecks: Map[String, CheckerFn],
   var readinessChecks: Map[String, CheckerFn]
-) extends HealthCheckApi {
+) extends HealthCheckApi with StrictLogging {
   implicit val ec: ExecutionContext = ExecutionContext.global
 
   private def doCheck(checks: Map[String, CheckerFn]): Future[(Boolean, JValue)] = {
@@ -73,6 +75,7 @@ class HealthCheckServer(
       if (success) {
         HealthCheckSuccess(serializedPayload)
       } else {
+        logger.warn(s"replying with failed health check: [{}]", v("healthCheckBody", serializedPayload))
         HealthCheckFailure(serializedPayload)
       }
     }
@@ -104,9 +107,11 @@ object HealthCheckServer {
   implicit def f0ToCheckerFn(a: () => Future[CheckResult]): CheckerFn = ec => a()
 }
 
-object Checks {
+object Checks extends StrictLogging {
   def notInitialized(name: String): (String, CheckerFn) = {
-    (name, () => Future.successful(CheckResult(name, success = false, JObject("status" -> JString("not initialized")))))
+    // I'm pretty sure that "not-initialized" should be counted as a success - it's a normal occurrence in the program's
+    // lifetime
+    (name, () => Future.successful(CheckResult(name, success = true, JObject("status" -> JString("not initialized")))))
   }
 
   def ok(name: String): (String, CheckerFn) = {
@@ -160,15 +165,26 @@ object Checks {
 
     val processedMetrics = relevantMetrics(metrics)
     // TODO: ask for other failure conditions
-    val success = (!connectionCountMustBeNonZero ||
-      processedMetrics.getOrElse("connection-count", 0.0).asInstanceOf[Double] != 0.0) &&
-      {
-        val lastHeartbeat = processedMetrics.getOrElse("last-heartbeat-seconds-ago", 0.0).asInstanceOf[Double]
+    val success = {
+      val isCountOk =
+        !connectionCountMustBeNonZero || processedMetrics.getOrElse("connection-count", 0.0).asInstanceOf[Double] != 0.0
+      if (!isCountOk)
+        logger.warn(s"kafka client ({}) connection-count is zero, but it must be non-zero!",
+          v("kafkaClientName", name))
+      isCountOk
+    } && {
+      val lastHeartbeat = processedMetrics.getOrElse("last-heartbeat-seconds-ago", 0.0).asInstanceOf[Double]
 
-        // the second part of that check is needed because kafka uses unreasonable defaults
-        // (the value is roughly seconds since 1970, as of 2019-10-28)
-        lastHeartbeat < 60.0 || lastHeartbeat > 49 * 365 * 24 * 60 * 60
-      }
+      // the second part of that check is needed because kafka uses unreasonable defaults
+      // (the value is roughly seconds since 1970, as of 2019-10-28)
+      val isLastHeartbeatOk = lastHeartbeat < 60.0 || lastHeartbeat > 49 * 365 * 24 * 60 * 60
+
+      if (!isLastHeartbeatOk)
+        logger.warn("last kafka client ({}) heartbeat was {} seconds ago",
+          v("kafkaClientName", name), v("heartbeatSecondsAgo", lastHeartbeat))
+
+      isLastHeartbeatOk
+    }
 
     def json(metrics: Map[String, AnyRef]): JValue =
       JsonMethods.fromJsonNode(JsonMethods.mapper.valueToTree[JsonNode](metrics.asJava))
@@ -202,23 +218,30 @@ object Checks {
 
       Future.sequence(metadata.fetch().nodes().asScala.map { node =>
         Future {
+          val kafkaNodeAddress = new InetSocketAddress(node.host(), node.port())
+
           // Q: Why isn't this just using [java.net.InetAddress.isReachable(int)]?
           // A: Because that uses ICMP and Kubernetes is sometimes weird about ICMP (so for example, ping doesn't work
           //    sometimes)
           val reachableViaKafkaTcpPort = try {
             val socket = new Socket()
-            socket.connect(new InetSocketAddress(node.host(), node.port()), 100)
+            socket.connect(kafkaNodeAddress, 100)
             socket.close()
             true
           } catch {
             case _: Throwable => false
           }
 
+          if (!reachableViaKafkaTcpPort)
+            logger.warn("kafka node {} is not reachable", v("kafkaNodeAddress", kafkaNodeAddress))
+
           node.host() -> reachableViaKafkaTcpPort
         }
       }).map { reachability =>
-        CheckResult("kafka-nodes-reachable", reachability.exists(_._2),
-          JObject(reachability.toList.map { case (host, reachable) => host -> JBool(reachable) }))
+        val success = reachability.exists(_._2)
+        CheckResult("kafka-nodes-reachable", success,
+          JObject(("status", if (success) JString("ok") else JString("nok")) ::
+            reachability.toList.map { case (host, reachable) => host -> JBool(reachable) }))
       }
     }
   }
