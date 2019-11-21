@@ -21,6 +21,8 @@ class JettyServer(api: HealthCheckApi, docs: OpenApi, port: Int) extends StrictL
     server.start()
   }
 
+  def stop(): Unit = server.stop()
+
   def join(): Unit = server.join()
 
   private def addSwagger(openApi: OpenApi, swaggerPrefix: String): Unit = {
