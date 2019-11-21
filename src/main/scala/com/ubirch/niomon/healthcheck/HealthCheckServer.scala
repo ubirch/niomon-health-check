@@ -99,6 +99,9 @@ class HealthCheckServer(
   }
 
   def join(): Unit = if (server != null) server.join()
+
+  def stop(): Unit = if (server != null) server.stop()
+
 }
 
 object HealthCheckServer {
