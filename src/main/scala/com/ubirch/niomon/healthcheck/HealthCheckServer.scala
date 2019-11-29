@@ -27,8 +27,14 @@ import scala.concurrent.{ExecutionContext, Future}
 import scala.language.implicitConversions
 import scala.util.{Failure, Success}
 
+/** Health check result. */
 case class CheckResult(checkName: String, success: Boolean, payload: JValue)
 
+/**
+ * Health check server. Create an instance, add some checks, and then start the server using `.run(port)`.
+ * Checks are split into liveness and readiness checks. Refer to kubernetes documentation for the definition of the
+ * two.
+ */
 class HealthCheckServer(
   var livenessChecks: Map[String, CheckerFn],
   var readinessChecks: Map[String, CheckerFn]
@@ -87,6 +93,7 @@ class HealthCheckServer(
 
   private var server: JettyServer = _
 
+  /** Start a Jetty server that serves the health checks on `port`. */
   def run(port: Int): Unit = {
     if (server != null) join()
 
@@ -110,6 +117,7 @@ object HealthCheckServer {
   implicit def f0ToCheckerFn(a: () => Future[CheckResult]): CheckerFn = ec => a()
 }
 
+/** A collection of common checks */
 object Checks extends StrictLogging {
   def notInitialized(name: String): (String, CheckerFn) = {
     // I'm pretty sure that "not-initialized" should be counted as a success - it's a normal occurrence in the program's
@@ -121,6 +129,7 @@ object Checks extends StrictLogging {
     (name, () => Future.successful(CheckResult(name, success = true, JObject("status" -> JString("ok")))))
   }
 
+  /** Gathers process data using Prometheus' collectors. Always succeeds. */
   def process(): (String, CheckerFn) = {
     ("process", { () =>
       val dataPoints = Collections.list(CollectorRegistry.defaultRegistry.filteredMetricFamilySamples(Set(
@@ -139,6 +148,7 @@ object Checks extends StrictLogging {
     })
   }
 
+  /** Extracts relevant kafka metrics and evaluates whether they are healthy. */
   private def processKafkaMetrics(name: String, metrics: collection.Map[MetricName, Metric], connectionCountMustBeNonZero: Boolean) = {
     implicit class RichMetric(m: Metric) {
       // we're never interested in consumer node metrics, so let's get rid of them here
@@ -197,20 +207,24 @@ object Checks extends StrictLogging {
     CheckResult(name, success, payload)
   }
 
+  /** Check kafka given a akka-kafka [[Control]] */
   def kafka(name: String, kafkaControl: Control, connectionCountMustBeNonZero: Boolean): (String, CheckerFn) = (name, { implicit ec =>
     kafkaControl.metrics.map(processKafkaMetrics(name, _, connectionCountMustBeNonZero))
   })
 
+  /** Check kafka given a kafka [[Producer]] */
   def kafka(name: String, producer: Producer[_, _], connectionCountMustBeNonZero: Boolean): (String, CheckerFn) = (name, { () =>
     val metrics = producer.metrics().asScala
     Future.successful(processKafkaMetrics(name, metrics, connectionCountMustBeNonZero))
   })
 
+  /** Check kafka given a kafka [[Consumer]] */
   def kafka(name: String, consumer: Consumer[_, _], connectionCountMustBeNonZero: Boolean): (String, CheckerFn) = (name, { () =>
     val metrics = consumer.metrics().asScala
     Future.successful(processKafkaMetrics(name, metrics, connectionCountMustBeNonZero))
   })
 
+  /** Check if any kafka node is reachable */
   def kafkaNodesReachable(producer: Producer[_, _]): (String, HealthCheckServer.CheckerFn) = {
     val kafkaProducer = producer.asInstanceOf[KafkaProducer[_, _]]
     val f = classOf[KafkaProducer[_, _]].getDeclaredField("metadata")
@@ -249,6 +263,8 @@ object Checks extends StrictLogging {
     }
   }
 }
+
+// below is udash-rest related stuff
 
 @adjustSchema(HealthCheckResponse.flatten)
 sealed trait HealthCheckResponse

@@ -5,6 +5,8 @@ import io.udash.rest.{DefaultRestImplicits, GET, RestApiCompanion}
 
 import scala.concurrent.Future
 
+// udash-rest stuff to expose generated OpenApi as swagger.json
+
 trait SwaggerJsonApi {
   @GET("")
   def json: Future[OpenApi]
