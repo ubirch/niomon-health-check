@@ -6,6 +6,7 @@ import io.udash.rest.openapi.OpenApi
 import org.eclipse.jetty
 import org.eclipse.jetty.servlet.{DefaultServlet, ServletContextHandler, ServletHolder}
 
+/** A simple jetty server for serving [[HealthCheckApi]]s */
 class JettyServer(api: HealthCheckApi, docs: OpenApi, port: Int) extends StrictLogging {
   private val healthCheckApiServlet = RestServlet[HealthCheckApi](api)
   private val server = new jetty.server.Server(port)
