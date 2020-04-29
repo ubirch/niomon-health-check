@@ -9,10 +9,11 @@ import com.fasterxml.jackson.databind.JsonNode
 import com.typesafe.scalalogging.StrictLogging
 import com.ubirch.niomon.healthcheck.HealthCheckServer._
 import io.prometheus.client.CollectorRegistry
-import io.udash.rest.openapi.adjusters.adjustSchema
 import io.udash.rest.openapi._
+import io.udash.rest.openapi.adjusters.adjustSchema
 import io.udash.rest.raw.{HttpBody, JsonValue, RestResponse}
 import io.udash.rest.{DefaultRestApiCompanion, GET, RestDataCompanion, RestDataWrapperCompanion}
+import net.logstash.logback.argument.StructuredArguments.v
 import org.apache.kafka.clients.Metadata
 import org.apache.kafka.clients.consumer.Consumer
 import org.apache.kafka.clients.producer.{KafkaProducer, Producer}
@@ -20,7 +21,6 @@ import org.apache.kafka.common.{Metric, MetricName}
 import org.json4s.JsonAST._
 import org.json4s.JsonDSL
 import org.json4s.jackson.JsonMethods
-import net.logstash.logback.argument.StructuredArguments.v
 
 import scala.collection.JavaConverters._
 import scala.concurrent.{ExecutionContext, Future}
