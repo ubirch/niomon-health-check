@@ -114,7 +114,7 @@ class HealthCheckServer(
 object HealthCheckServer {
   type CheckerFn = ExecutionContext => Future[CheckResult]
 
-  implicit def f0ToCheckerFn(a: () => Future[CheckResult]): CheckerFn = ec => a()
+  implicit def f0ToCheckerFn(a: () => Future[CheckResult]): CheckerFn = _ => a()
 }
 
 /** A collection of common checks */
