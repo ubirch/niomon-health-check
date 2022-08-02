@@ -32,6 +32,12 @@
             <organization>ubirch GmbH</organization>
             <organizationUrl>https://ubirch.com/</organizationUrl>
         </developer>
+        <developer>
+            <name>Carlos Sanchez</name>
+            <email>carlos.sanchezi@ubirch.com</email>
+            <organization>ubirch GmbH</organization>
+            <organizationUrl>https://ubirch.com/</organizationUrl>
+        </developer>
     </developers>
 
     <scm>
@@ -350,7 +356,7 @@
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-checkstyle-plugin</artifactId>
-                <version>3.0.0</version>
+                <version>3.1.2</version>
                 <executions>
                     <execution>
                         <id>verify-style</id>
@@ -379,7 +385,7 @@
                     <dependency>
                         <groupId>com.puppycrawl.tools</groupId>
                         <artifactId>checkstyle</artifactId>
-                        <version>8.18</version>
+                        <version>8.45.1</version>
                     </dependency>
                 </dependencies>
             </plugin>
